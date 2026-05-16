@@ -152,6 +152,43 @@ Your Identity:
 
 </div>
 
+
+
+
+
+<div class="box">
+
+<b>NETWORK STRENGTH</b>
+
+<div id="wifiText">
+Checking...
+</div>
+
+<div style="
+width:100%;
+height:18px;
+background:#001a10;
+border-radius:10px;
+overflow:hidden;
+margin-top:8px;
+">
+
+<div id="wifiBar" style="
+height:100%;
+width:0%;
+background:#00ff99;
+transition:0.5s;
+">
+</div>
+
+</div>
+
+</div>
+
+
+
+
+
 <div class="box">
 
 <b>LIVE DEBUG CONSOLE</b>
@@ -186,6 +223,11 @@ let myUsername = "";
     myUsername = savedUser;
 
     loggedIn = true;
+
+    localStorage.setItem(
+      "accountUsername",
+      myUsername
+    );
 
     document.getElementById(
       "myId"
@@ -420,6 +462,111 @@ async function login(){
 
 
 
+async function monitorConnection(){
+
+  try{
+
+    const start = performance.now();
+
+    await fetch(
+      SERVER + "/health?t=" + Date.now(),
+      {
+        cache:"no-store"
+      }
+    );
+
+    const latency =
+      performance.now() - start;
+
+    let strength = 100;
+
+    if(latency > 1000){
+
+      strength = 20;
+
+    }else if(latency > 700){
+
+      strength = 40;
+
+    }else if(latency > 400){
+
+      strength = 60;
+
+    }else if(latency > 200){
+
+      strength = 80;
+
+    }
+
+    const bar =
+      document.getElementById("wifiBar");
+
+    const text =
+      document.getElementById("wifiText");
+
+    bar.style.width =
+      strength + "%";
+
+    if(strength > 80){
+
+      text.innerText =
+        "🟢 Excellent Connection";
+
+    }else if(strength > 60){
+
+      text.innerText =
+        "🟡 Good Connection";
+
+    }else if(strength > 40){
+
+      text.innerText =
+        "🟠 Weak Connection";
+
+    }else{
+
+      text.innerText =
+        "🔴 Poor Connection";
+
+    }
+
+  }catch(err){
+
+    document.getElementById(
+      "wifiBar"
+    ).style.width = "5%";
+
+    document.getElementById(
+      "wifiText"
+    ).innerText =
+      "❌ Offline";
+
+    debug("NETWORK LOST");
+
+    if(peer){
+
+      try{
+
+        peer.reconnect();
+
+      }catch(e){}
+
+    }
+
+  }
+
+}
+
+setInterval(
+  monitorConnection,
+  4000
+);
+
+monitorConnection();
+
+
+
+
+
 function logout(){
 
   debug("Logging out");
@@ -478,7 +625,16 @@ async function startPeer(){
     debug("Microphone granted");
 
 
-    peer = new Peer(myUsername,{
+
+  const peerId =
+    myUsername +
+    "-" +
+    Math.random()
+    .toString(36)
+    .substring(2,8);
+
+
+    peer = new Peer(peerId,{
       host:"websitespeaks.onrender.com",
       secure:true,
       port:443,
@@ -492,6 +648,10 @@ async function startPeer(){
 
 
       debug("PEER OPENED => " + id);
+      localStorage.setItem(
+        "peerId",
+        id
+      );
 
       setStatus("🟢 Logged in");
 
@@ -725,6 +885,28 @@ window.onerror = function(msg,url,line,col,error){
 };
 
 debug("PAGE LOADED");
+  const remembered =
+    localStorage.getItem(
+      "accountUsername"
+    );
+
+  if(remembered){
+
+    myUsername = remembered;
+
+    loggedIn = true;
+
+    document.getElementById(
+      "myId"
+    ).innerText = myUsername;
+
+    debug(
+      "RESTORING ACCOUNT SESSION"
+    );
+
+    startPeer();
+
+  }
 
 renderUsers();
 
