@@ -37,7 +37,7 @@ app.use(
 );
 
 /* -------------------------- */
-/* BROADCAST ONLINE USERS */
+/* BROADCAST USERS */
 /* -------------------------- */
 
 function broadcastUsers(){
@@ -78,13 +78,12 @@ wss.on("connection", (ws) => {
             const data =
                 JSON.parse(msg);
 
-            /* ------------------ */
             /* USER JOIN */
-            /* ------------------ */
 
             if(data.type === "join"){
 
-                currentPeerId = data.peerId;
+                currentPeerId =
+                    data.peerId;
 
                 users.set(currentPeerId, {
 
@@ -111,9 +110,7 @@ wss.on("connection", (ws) => {
 
     });
 
-    /* ---------------------- */
-    /* USER LEAVES */
-    /* ---------------------- */
+    /* USER DISCONNECT */
 
     ws.on("close", ()=>{
 
