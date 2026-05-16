@@ -12,189 +12,203 @@ app.use(express.static(path.join(__dirname, "public")));
 
 const db = new sqlite3.Database("./users.db");
 
+/* -------------------- */
+/* TABLE */
+/* -------------------- */
+
 db.run(`
 CREATE TABLE IF NOT EXISTS users (
   username TEXT PRIMARY KEY
 )
 `);
 
-const sockets = new Map(); // username → ws
-const online = new Map();  // username → peerId
+/* -------------------- */
+/* MEMORY MAPS */
+/* -------------------- */
+
+const sockets = new Map();  // username → ws
+const peers = new Map();    // username → peerId
+
+function normalize(u){
+  return (u || "").trim().toLowerCase();
+}
 
 /* -------------------- */
 /* BROADCAST USERS */
 /* -------------------- */
 
-function broadcastUsers() {
-  const list = Array.from(online.entries()).map(([username, peerId]) => ({
+function broadcastUsers(){
+
+  const users = Array.from(peers.entries()).map(([username, peerId])=>({
     username,
     peerId
   }));
 
-  const msg = JSON.stringify({ type: "users", users: list });
-
-  wss.clients.forEach(c => {
-    if (c.readyState === WebSocket.OPEN) c.send(msg);
+  wss.clients.forEach(c=>{
+    if(c.readyState === WebSocket.OPEN){
+      c.send(JSON.stringify({
+        type:"users",
+        users
+      }));
+    }
   });
 }
 
 /* -------------------- */
-/* SEND FUNCTION */
+/* SEND HELPER */
 /* -------------------- */
 
-function send(user, data) {
+function send(user, data){
   const ws = sockets.get(user);
-  if (ws && ws.readyState === WebSocket.OPEN) {
+  if(ws && ws.readyState === WebSocket.OPEN){
     ws.send(JSON.stringify(data));
   }
 }
 
 /* -------------------- */
-/* WS CONNECTION */
+/* MAIN SOCKET */
 /* -------------------- */
 
-wss.on("connection", (ws) => {
+wss.on("connection",(ws)=>{
 
   let currentUser = null;
 
-  ws.on("message", (msg) => {
+  ws.on("message",(msg)=>{
 
     const data = JSON.parse(msg);
 
-    /* -------------------- */
+    /* ==================== */
     /* SIGNUP */
-/* -------------------- */
+    /* ==================== */
 
-    if (data.type === "signup") {
+    if(data.type === "signup"){
 
-      const username = data.username;
+      const username = normalize(data.username);
 
-      if (!username || username.length < 10) {
+      if(username.length < 10){
         return ws.send(JSON.stringify({
-          type: "error",
-          message: "Min 10 characters required"
+          type:"error",
+          message:"Username must be 10+ characters"
         }));
       }
 
       db.get(
         "SELECT username FROM users WHERE username=?",
         [username],
-        (err, row) => {
+        (err,row)=>{
 
-          if (row) {
+          if(row){
             ws.send(JSON.stringify({
-              type: "error",
-              message: "Username already exists"
+              type:"error",
+              message:"Username already exists"
             }));
           } else {
 
-            db.run("INSERT INTO users(username) VALUES(?)", [username]);
+            db.run("INSERT INTO users(username) VALUES(?)",[username]);
 
             ws.send(JSON.stringify({
-              type: "ok",
-              message: "Signup success"
+              type:"ok",
+              message:"Signup successful"
             }));
           }
         }
       );
     }
 
-    /* -------------------- */
-    /* SIGNIN (STRICT MATCH ONLY) */
-/* -------------------- */
+    /* ==================== */
+    /* SIGNIN (STRICT CHECK) */
+    /* ==================== */
 
-    if (data.type === "signin") {
+    if(data.type === "signin"){
 
-      const username = data.username;
+      const username = normalize(data.username);
 
       db.get(
         "SELECT username FROM users WHERE username=?",
         [username],
-        (err, row) => {
+        (err,row)=>{
 
-          if (!row) {
+          if(!row){
             return ws.send(JSON.stringify({
-              type: "error",
-              message: "Account not found"
+              type:"error",
+              message:"User not registered"
             }));
           }
 
           currentUser = username;
 
           sockets.set(username, ws);
-          online.set(username, data.peerId);
+          peers.set(username, data.peerId);
 
           broadcastUsers();
 
           ws.send(JSON.stringify({
-            type: "ok",
-            message: "Online"
+            type:"ok",
+            message:"Signed in"
           }));
         }
       );
     }
 
-    /* -------------------- */
+    /* ==================== */
     /* CALL REQUEST */
-/* -------------------- */
+    /* ==================== */
 
-    if (data.type === "call-request") {
+    if(data.type === "call-request"){
 
-      send(data.to, {
-        type: "incoming-call",
-        from: data.from,
-        peerId: data.from
+      send(data.to,{
+        type:"incoming-call",
+        from:data.from,
+        peerId:data.from
       });
     }
 
-    /* -------------------- */
+    /* ==================== */
     /* ACCEPT CALL */
-/* -------------------- */
+    /* ==================== */
 
-    if (data.type === "accept-call") {
+    if(data.type === "accept-call"){
 
-      send(data.to, {
-        type: "call-accepted",
-        peerId: data.from
+      send(data.to,{
+        type:"call-accepted",
+        peerId:data.from
       });
 
-      send(data.from, {
-        type: "call-start"
+      send(data.from,{
+        type:"call-start"
       });
     }
 
-    /* -------------------- */
+    /* ==================== */
     /* REJECT CALL */
-/* -------------------- */
+    /* ==================== */
 
-    if (data.type === "reject-call") {
+    if(data.type === "reject-call"){
 
-      send(data.to, {
-        type: "call-rejected"
+      send(data.to,{
+        type:"call-rejected"
       });
     }
 
-    /* -------------------- */
+    /* ==================== */
     /* END CALL */
-/* -------------------- */
+    /* ==================== */
 
-    if (data.type === "end-call") {
+    if(data.type === "end-call"){
 
-      send(data.to, {
-        type: "call-ended"
-      });
+      send(data.to,{ type:"call-ended" });
+      send(data.from,{ type:"call-ended" });
     }
 
   });
 
-  ws.on("close", () => {
+  ws.on("close",()=>{
 
-    if (currentUser) {
+    if(currentUser){
       sockets.delete(currentUser);
-      online.delete(currentUser);
+      peers.delete(currentUser);
       broadcastUsers();
     }
-
   });
 
 });
