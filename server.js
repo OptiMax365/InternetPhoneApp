@@ -1,198 +1,106 @@
 // server.js
-
 import express from "express";
 import cors from "cors";
-import bodyParser from "body-parser";
-import pkg from "pg";
 import bcrypt from "bcrypt";
-import { ExpressPeerServer } from "peer";
-import http from "http";
+import pkg from "pg";
 
 const { Pool } = pkg;
-
 const app = express();
-const server = http.createServer(app);
-
-const port = process.env.PORT || 3000;
-
-// =========================
-// POSTGRESQL DATABASE
-// =========================
-
-const pool = new Pool({
-  connectionString:
-    process.env.DATABASE_URL ||
-    "postgresql://admin:jJYTKV0cpikWb4aN5bTIhOaQIN6Tm70Z@dpg-d844caeq1p3s738l08g0-a/voice_mesh_db",
-  ssl: {
-    rejectUnauthorized: false,
-  },
-});
-
-// =========================
-// CREATE USERS TABLE
-// =========================
-
-async function createTable() {
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        username TEXT UNIQUE NOT NULL,
-        password TEXT NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-
-    console.log("Users table ready");
-  } catch (err) {
-    console.log(err);
-  }
-}
-
-createTable();
-
-// =========================
-// MIDDLEWARE
-// =========================
+const PORT = process.env.PORT || 3000;
 
 app.use(cors());
-app.use(bodyParser.json());
-app.use(express.static("public"));
+app.use(express.json());
 
-// =========================
-// PEER SERVER
-// =========================
-
-const peerServer = ExpressPeerServer(server, {
-  debug: true,
-  path: "/",
+// DATABASE CONFIGURATION
+// Use DATABASE_URL environment variable (Render provides it)
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: {
+        rejectUnauthorized: false // Required for Render
+    }
 });
 
-app.use("/peerjs", peerServer);
-
-// =========================
-// SIGNUP
-// =========================
-
-app.post("/signup", async (req, res) => {
-  try {
-    let { username, password } = req.body;
-
-    if (!username || !password) {
-      return res.status(400).json({
-        success: false,
-        message: "Missing username or password",
-      });
+// CREATE USERS TABLE IF NOT EXISTS
+async function startDatabase() {
+    try {
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS users(
+                id SERIAL PRIMARY KEY,
+                username VARCHAR(100) UNIQUE NOT NULL,
+                password TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+        console.log("✅ Database Ready");
+    } catch (err) {
+        console.error("❌ Database Error:", err);
     }
+}
 
-    username = username
-      .toLowerCase()
-      .replace(/[^a-z0-9]/g, "");
+startDatabase();
 
-    const existing = await pool.query(
-      "SELECT * FROM users WHERE username = $1",
-      [username]
-    );
-
-    if (existing.rows.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Username already exists",
-      });
-    }
-
-    const hashed = await bcrypt.hash(password, 10);
-
-    await pool.query(
-      "INSERT INTO users(username,password) VALUES($1,$2)",
-      [username, hashed]
-    );
-
-    res.json({
-      success: true,
-      message: "Registered successfully",
-      username,
-    });
-  } catch (err) {
-    console.log(err);
-
-    res.status(500).json({
-      success: false,
-      message: "Signup server error",
-    });
-  }
-});
-
-// =========================
-// LOGIN
-// =========================
-
-app.post("/login", async (req, res) => {
-  try {
-    let { username, password } = req.body;
-
-    if (!username || !password) {
-      return res.status(400).json({
-        success: false,
-        message: "Missing username or password",
-      });
-    }
-
-    username = username
-      .toLowerCase()
-      .replace(/[^a-z0-9]/g, "");
-
-    const result = await pool.query(
-      "SELECT * FROM users WHERE username = $1",
-      [username]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid username",
-      });
-    }
-
-    const user = result.rows[0];
-
-    const valid = await bcrypt.compare(password, user.password);
-
-    if (!valid) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid password",
-      });
-    }
-
-    res.json({
-      success: true,
-      message: "Login successful",
-      username: user.username,
-      peerId: user.username,
-    });
-  } catch (err) {
-    console.log(err);
-
-    res.status(500).json({
-      success: false,
-      message: "Login server error",
-    });
-  }
-});
-
-// =========================
-// ONLINE TEST
-// =========================
-
+// ROOT ENDPOINT
 app.get("/", (req, res) => {
-  res.send("VOICE MESH SERVER ONLINE");
+    res.send("VOICE MESH SERVER RUNNING");
 });
 
-// =========================
-// START SERVER
-// =========================
+// SIGNUP ENDPOINT
+app.post("/signup", async (req, res) => {
+    try {
+        let { username, password } = req.body;
 
-server.listen(port, () => {
-  console.log(`Server running on port ${port}`);
+        if (!username || !password) {
+            return res.status(400).json({ error: "Missing username or password" });
+        }
+
+        username = username.toLowerCase().trim();
+
+        const check = await pool.query("SELECT * FROM users WHERE username=$1", [username]);
+        if (check.rows.length > 0) {
+            return res.status(400).json({ error: "Username already exists" });
+        }
+
+        const hashed = await bcrypt.hash(password, 10);
+        await pool.query("INSERT INTO users(username,password) VALUES($1,$2)", [username, hashed]);
+
+        res.json({ success: true, message: "User registered" });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Signup server error" });
+    }
+});
+
+// LOGIN ENDPOINT
+app.post("/login", async (req, res) => {
+    try {
+        let { username, password } = req.body;
+
+        if (!username || !password) {
+            return res.status(400).json({ error: "Missing username or password" });
+        }
+
+        username = username.toLowerCase().trim();
+
+        const result = await pool.query("SELECT * FROM users WHERE username=$1", [username]);
+        if (result.rows.length === 0) {
+            return res.status(400).json({ error: "Invalid username" });
+        }
+
+        const user = result.rows[0];
+        const valid = await bcrypt.compare(password, user.password);
+
+        if (!valid) {
+            return res.status(400).json({ error: "Invalid password" });
+        }
+
+        res.json({ success: true, username: user.username, message: "Login success" });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Login server error" });
+    }
+});
+
+// START SERVER
+app.listen(PORT, () => {
+    console.log(`✅ SERVER RUNNING ON PORT ${PORT}`);
 });
