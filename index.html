@@ -160,30 +160,32 @@ Your Identity:
 
 <b>NETWORK STRENGTH</b>
 
-<div id="wifiText">
-Checking...
-</div>
+  <div id="wifiText">
+  Checking...
+  </div>
 
 <div style="
-width:100%;
-height:18px;
-background:#001a10;
+height:20px;
+background:#111;
 border-radius:10px;
 overflow:hidden;
-margin-top:8px;
+margin-top:10px;
 ">
 
-<div id="wifiBar" style="
-height:100%;
-width:0%;
-background:#00ff99;
-transition:0.5s;
-">
-</div>
+  <div id="wifiBar" style="
+  width:100%;
+  height:100%;
+  background:#00ff99;
+  transition:0.5s;
+"></div>
 
 </div>
 
+
+
 </div>
+
+
 
 
 
@@ -211,6 +213,7 @@ let localStream = null;
 let currentCall = null;
 let loggedIn = false;
 let myUsername = "";
+let onlineUsers = {};
 
 
 
@@ -566,16 +569,23 @@ monitorConnection();
 
 
 
-
 function logout(){
 
   debug("Logging out");
 
-  localStorage.removeItem("loggedUser");
+  localStorage.removeItem(
+    "loggedUser"
+  );
 
   loggedIn = false;
 
   myUsername = "";
+
+  if(currentCall){
+
+    currentCall.close();
+
+  }
 
   if(peer){
 
@@ -587,8 +597,9 @@ function logout(){
 
   peer = null;
 
-  document.getElementById("myId")
-  .innerText = "---";
+  document.getElementById(
+    "myId"
+  ).innerText = "---";
 
   setStatus("Logged out");
 
@@ -598,8 +609,6 @@ function logout(){
 
 
 async function startPeer(){
-
-
 
   if(peer){
 
@@ -611,28 +620,22 @@ async function startPeer(){
 
   }
 
-
-
   try{
 
     debug("Requesting microphone access...");
 
-    localStream =
-      await navigator.mediaDevices.getUserMedia({
-        audio:true
-      });
+    if(!localStream){
+
+      localStream =
+        await navigator.mediaDevices.getUserMedia({
+          audio:true
+        });
+
+    }
 
     debug("Microphone granted");
 
-
-
-  const peerId =
-    myUsername +
-    "-" +
-    Math.random()
-    .toString(36)
-    .substring(2,8);
-
+    const peerId = myUsername;
 
     peer = new Peer(peerId,{
       host:"websitespeaks.onrender.com",
@@ -641,90 +644,143 @@ async function startPeer(){
       path:"/peerjs"
     });
 
-
     debug("Starting PeerJS...");
 
-    peer.on("open", id => {
-
+    peer.on("open",async(id)=>{
 
       debug("PEER OPENED => " + id);
+
+      loggedIn = true;
+
+      localStorage.setItem(
+        "loggedUser",
+        myUsername
+      );
+
       localStorage.setItem(
         "peerId",
         id
       );
 
+      await fetch(
+        SERVER + "/active",
+        {
+          method:"POST",
+          headers:{
+            "Content-Type":"application/json"
+          },
+          body:JSON.stringify({
+            username:myUsername,
+            peerId:id
+          })
+        }
+      );
+
       setStatus("🟢 Logged in");
 
       setTimeout(()=>{
+
         setStatus("📞 Ready state");
+
       },1000);
 
+      updateOnlineStatus();
+
     });
 
-    
+
+
+
+
+
+
     peer.on("disconnected",()=>{
-    debug("PEER DISCONNECTED");
-    setStatus("⚠ Reconnecting...");
-      try{
-        peer.reconnect();
 
-      }catch(err){
+      debug("PEER DISCONNECTED");
 
-        debug("Reconnect failed");
+      setStatus("⚠ Weak connection reconnecting...");
 
-      }
-
-    });
-
-    peer.on("call", call => {
-
-      debug("INCOMING CALL FROM => " + call.peer);
-
-      incomingCall = call;
-
-      document.getElementById("incoming")
-      .style.display = "block";
-
-      document.getElementById("callerName")
-      .innerText =
-        "📞 Ringing from: " + call.peer;
-
-      setStatus("📞 Ringing");
-
-    });
-
-    peer.on("error", err => {
-
-      debug("PEER ERROR:");
-      debug(JSON.stringify(err));
-
-      setStatus("❌ Peer Error");
-
-      if(
-        err.type === "network" ||
-        err.type === "disconnected"
-      ){
-
-        debug("Attempting reconnect...");
+      setTimeout(()=>{
 
         try{
 
           peer.reconnect();
 
-        }catch(e){
+        }catch(err){
 
           debug("Reconnect failed");
 
+          startPeer();
+
         }
 
-      }
+      },3000);
 
     });
 
+    peer.on("close",()=>{
+
+      debug("PEER CLOSED");
+
+      setStatus("⚠ Connection closed");
+
+    });
+
+    peer.on("error",err=>{
+
+      debug("PEER ERROR:");
+      debug(JSON.stringify(err));
+
+      if(
+        err.type === "network" ||
+        err.type === "server-error" ||
+        err.type === "socket-error"
+      ){
+
+        setStatus("⚠ Weak internet reconnecting...");
+
+        setTimeout(()=>{
+
+          startPeer();
+
+        },4000);
+
+      }
 
 
 
+      if(err.type === "unavailable-id"){
 
+        debug("USERNAME ALREADY ACTIVE");
+
+        setStatus("⚠ Already logged in elsewhere");
+
+        return;
+
+      }
+
+
+
+    });
+
+    peer.on("call",call=>{
+
+      debug("INCOMING CALL FROM => " + call.peer);
+
+      incomingCall = call;
+
+      document.getElementById(
+        "incoming"
+      ).style.display = "block";
+
+      document.getElementById(
+        "callerName"
+      ).innerText =
+        "📞 Ringing from: " + call.peer;
+
+      setStatus("📞 Incoming Call");
+
+    });
 
   }catch(err){
 
@@ -735,7 +791,43 @@ async function startPeer(){
 
   }
 
+
+
 }
+
+
+
+async function updateOnlineStatus(){
+
+  try{
+
+    await fetch(
+      SERVER + "/health"
+    );
+
+    document.getElementById(
+      "wifiText"
+    ).innerText = "Strong";
+
+    document.getElementById(
+      "wifiBar"
+    ).style.width = "100%";
+
+  }catch(err){
+
+    document.getElementById(
+      "wifiText"
+    ).innerText = "Weak";
+
+    document.getElementById(
+      "wifiBar"
+    ).style.width = "30%";
+
+  }
+
+}
+
+
 
 function acceptCall(){
 
@@ -762,11 +854,15 @@ function acceptCall(){
   .style.display = "none";
 
 }
-function callUser(){
+
+
+
+
+async function callUser(){
 
   if(!loggedIn){
 
-    alert("Login first");
+    setStatus("❌ Login required");
 
     return;
 
@@ -774,27 +870,19 @@ function callUser(){
 
   if(!peer){
 
-    setStatus("❌ Peer not connected");
+    setStatus("❌ Peer unavailable");
 
     return;
 
   }
 
-  if(peer.disconnected){
-
-    setStatus("❌ Peer disconnected");
-
-    return;
-
-  }
-
-  const target =
+  const username =
     document.getElementById("callTo")
     .value
     .trim()
     .toLowerCase();
 
-  if(!target){
+  if(!username){
 
     alert("Enter username");
 
@@ -802,59 +890,80 @@ function callUser(){
 
   }
 
-  if(target === myUsername){
+  debug("LOOKING UP USER => " + username);
 
-    alert("Cannot call yourself");
+  try{
 
-    return;
+    const res =
+      await fetch(
+        SERVER +
+        "/active/" +
+        username
+      );
 
-  }
+    const data =
+      await res.json();
 
-  debug("Calling => " + target);
+    if(!data.peerId){
 
-  setStatus("📞 Calling " + target);
+      setStatus("❌ User offline");
 
-  const call =
-    peer.call(target,localStream);
+      return;
 
-  if(!call){
+    }
 
-    setStatus("❌ User offline");
+    debug(
+      "FOUND PEER => " +
+      data.peerId
+    );
 
-    return;
+    const call =
+      peer.call(
+        data.peerId,
+        localStream
+      );
 
-  }
+    currentCall = call;
 
-  currentCall = call;
+    setStatus(
+      "📞 Calling " + username
+    );
 
-  call.on("stream",remoteStream=>{
+    call.on("stream",stream=>{
 
-    debug("Connected to remote audio");
+      debug("CALL CONNECTED");
 
-    document.getElementById(
-      "remoteAudio"
-    ).srcObject = remoteStream;
+      document.getElementById(
+        "remoteAudio"
+      ).srcObject = stream;
 
-    setStatus("📞 In Call");
+      setStatus("📞 In Call");
 
-  });
+    });
 
-  call.on("close",()=>{
+    call.on("close",()=>{
 
-    debug("Call closed");
+      setStatus("Call ended");
 
-    setStatus("Call Ended");
+    });
 
-  });
+    call.on("error",(err)=>{
 
-  call.on("error",(err)=>{
+      debug("CALL ERROR");
+      debug(err.toString());
 
-    debug("CALL ERROR:");
+      setStatus("❌ Call failed");
+
+    });
+
+  }catch(err){
+
+    debug("CALL FAILED");
     debug(err.toString());
 
-    setStatus("❌ Call Failed");
+    setStatus("❌ Connection error");
 
-  });
+  }
 
 }
 
@@ -884,29 +993,7 @@ window.onerror = function(msg,url,line,col,error){
 
 };
 
-debug("PAGE LOADED");
-  const remembered =
-    localStorage.getItem(
-      "accountUsername"
-    );
 
-  if(remembered){
-
-    myUsername = remembered;
-
-    loggedIn = true;
-
-    document.getElementById(
-      "myId"
-    ).innerText = myUsername;
-
-    debug(
-      "RESTORING ACCOUNT SESSION"
-    );
-
-    startPeer();
-
-  }
 
 renderUsers();
 

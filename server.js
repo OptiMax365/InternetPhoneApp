@@ -19,8 +19,8 @@ const server = http.createServer(app);
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false
+  ssl:{
+    rejectUnauthorized:false
   }
 });
 
@@ -30,11 +30,58 @@ app.use(cors());
 
 app.use(express.static(__dirname));
 
+
+
 const peerServer = ExpressPeerServer(server,{
-  debug:true
+  debug:true,
+  path:"/"
 });
 
 app.use("/peerjs",peerServer);
+
+
+
+const activeUsers = {};
+
+
+
+peerServer.on("connection",(client)=>{
+
+  console.log(
+    "PEER CONNECTED:",
+    client.getId()
+  );
+
+});
+
+peerServer.on("disconnect",(client)=>{
+
+  console.log(
+    "PEER DISCONNECTED:",
+    client.getId()
+  );
+
+  for(const username in activeUsers){
+
+    if(
+      activeUsers[username] ===
+      client.getId()
+    ){
+
+      delete activeUsers[username];
+
+      console.log(
+        "REMOVED ACTIVE USER:",
+        username
+      );
+
+    }
+
+  }
+
+});
+
+
 
 async function createTable(){
 
@@ -52,13 +99,18 @@ async function createTable(){
 
   }catch(err){
 
-    console.log("DATABASE ERROR:",err);
+    console.log(
+      "DATABASE ERROR:",
+      err
+    );
 
   }
 
 }
 
 createTable();
+
+
 
 app.get("/",(req,res)=>{
 
@@ -68,6 +120,8 @@ app.get("/",(req,res)=>{
 
 });
 
+
+
 app.get("/health",(req,res)=>{
 
   res.json({
@@ -75,6 +129,52 @@ app.get("/health",(req,res)=>{
   });
 
 });
+
+
+
+app.post("/active",(req,res)=>{
+
+  const username =
+    req.body.username;
+
+  const peerId =
+    req.body.peerId;
+
+  if(username && peerId){
+
+    activeUsers[username] =
+      peerId;
+
+    console.log(
+      "ACTIVE USER:",
+      username,
+      peerId
+    );
+
+  }
+
+  res.json({
+    success:true
+  });
+
+});
+
+
+
+app.get("/active/:username",(req,res)=>{
+
+  const username =
+    req.params.username
+    ?.toLowerCase();
+
+  res.json({
+    peerId:
+      activeUsers[username] || null
+  });
+
+});
+
+
 
 app.post("/signup",async(req,res)=>{
 
@@ -113,14 +213,20 @@ app.post("/signup",async(req,res)=>{
     }
 
     const hash =
-      await bcrypt.hash(password,10);
+      await bcrypt.hash(
+        password,
+        10
+      );
 
     await pool.query(
       "INSERT INTO users(username,password) VALUES($1,$2)",
       [username,hash]
     );
 
-    console.log("NEW USER:",username);
+    console.log(
+      "NEW USER:",
+      username
+    );
 
     res.json({
       success:true
@@ -138,6 +244,8 @@ app.post("/signup",async(req,res)=>{
   }
 
 });
+
+
 
 app.post("/login",async(req,res)=>{
 
@@ -166,7 +274,8 @@ app.post("/login",async(req,res)=>{
 
     }
 
-    const user = result.rows[0];
+    const user =
+      result.rows[0];
 
     const valid =
       await bcrypt.compare(
@@ -183,7 +292,10 @@ app.post("/login",async(req,res)=>{
 
     }
 
-    console.log("LOGIN:",username);
+    console.log(
+      "LOGIN:",
+      username
+    );
 
     res.json({
       success:true,
@@ -203,23 +315,7 @@ app.post("/login",async(req,res)=>{
 
 });
 
-peerServer.on("connection",(client)=>{
 
-  console.log(
-    "PEER CONNECTED:",
-    client.getId()
-  );
-
-});
-
-peerServer.on("disconnect",(client)=>{
-
-  console.log(
-    "PEER DISCONNECTED:",
-    client.getId()
-  );
-
-});
 
 const PORT =
   process.env.PORT || 10000;
