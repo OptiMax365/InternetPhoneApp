@@ -113,39 +113,60 @@ button:hover {
 
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 
+<!-- KEEP YOUR STYLE SAME (NOT CHANGED) -->
+
 <script>
 let peer;
 let stream;
-let call;
-let username;
 let ws;
+let username;
+let currentCall;
+let currentIncoming = null;
 
 /* -------------------- */
-/* CONNECT TO BACKEND */
+/* CONNECT WS */
 /* -------------------- */
 
 function connectWS(){
 
   ws = new WebSocket(
     (location.protocol === "https:" ? "wss" : "ws") +
-    "://" +
-    location.host
+    "://" + location.host
   );
 
-  ws.onmessage = (msg)=>{
+  ws.onmessage = async (msg) => {
 
     const data = JSON.parse(msg.data);
 
+    /* USERS */
     if(data.type === "users"){
       renderUsers(data.users);
     }
 
-    if(data.type === "error"){
-      alert(data.message);
+    /* AUTH */
+    if(data.type === "error") alert(data.message);
+    if(data.type === "ok") setStatus(data.message);
+
+    /* INCOMING CALL */
+    if(data.type === "incoming-call"){
+
+      currentIncoming = data;
+
+      setStatus("📳 RINGING...");
+
+      showIncomingUI(data.from);
     }
 
-    if(data.type === "ok"){
-      setStatus(data.message);
+    /* CALL ACCEPTED */
+    if(data.type === "call-accepted"){
+
+      setStatus("🔵 ON CALL");
+
+    }
+
+    /* CALL REJECTED */
+    if(data.type === "call-rejected"){
+      setStatus("❌ Call rejected");
     }
   };
 }
@@ -156,7 +177,7 @@ function connectWS(){
 
 function signup(){
 
-  username = document.getElementById("name").value.trim();
+  username = getName();
 
   ws.send(JSON.stringify({
     type:"signup",
@@ -165,12 +186,12 @@ function signup(){
 }
 
 /* -------------------- */
-/* SIGNIN (START DEVICE) */
+/* SIGNIN */
 /* -------------------- */
 
 async function signin(){
 
-  username = document.getElementById("name").value.trim();
+  username = getName();
 
   stream = await navigator.mediaDevices.getUserMedia({audio:true});
 
@@ -184,68 +205,108 @@ async function signin(){
       peerId: username
     }));
 
-    document.getElementById("myId").innerText = username;
-    setStatus("ONLINE");
+    setStatus("🟢 ONLINE");
   });
 
-  peer.on("call", c=>{
+  peer.on("call", (call)=>{
 
-    c.answer(stream);
-    call = c;
+    call.answer(stream);
+    currentCall = call;
 
-    c.on("stream", remote=>{
+    call.on("stream", (remote)=>{
       document.getElementById("audio").srcObject = remote;
     });
   });
 }
 
 /* -------------------- */
-/* USERS LIST */
-/* -------------------- */
-
-function renderUsers(users){
-
-  const box = document.getElementById("network");
-  box.innerHTML = "";
-
-  users.forEach(u=>{
-
-    if(u.username === username) return;
-
-    const div = document.createElement("div");
-    div.className = "user";
-    div.innerText = u.username;
-
-    div.onclick = ()=>callUser(u.peerId);
-
-    box.appendChild(div);
-  });
-}
-
-/* -------------------- */
-/* CALL SYSTEM (UNCHANGED LOGIC) */
+/* CALL USER */
 /* -------------------- */
 
 function callUser(id){
 
-  const c = peer.call(id, stream);
+  setStatus("📞 CALLING...");
 
-  c.on("stream", remote=>{
-    document.getElementById("audio").srcObject = remote;
-  });
+  ws.send(JSON.stringify({
+    type:"call-user",
+    from: username,
+    to: id,
+    peerId: username
+  }));
+
+  currentCall = peer.call(id, stream);
 }
 
 /* -------------------- */
+/* ACCEPT CALL */
+/* -------------------- */
 
-function endCall(){
-  if(call) call.close();
-  document.getElementById("audio").srcObject = null;
+function acceptCall(){
+
+  ws.send(JSON.stringify({
+    type:"accept-call",
+    to: currentIncoming.from,
+    peerId: username
+  }));
+
+  hideIncomingUI();
 }
 
 /* -------------------- */
+/* REJECT CALL */
+/* -------------------- */
+
+function rejectCall(){
+
+  ws.send(JSON.stringify({
+    type:"reject-call",
+    to: currentIncoming.from
+  }));
+
+  hideIncomingUI();
+}
+
+/* -------------------- */
+/* UI HELPERS */
+/* -------------------- */
+
+function getName(){
+  return document.getElementById("name").value.trim();
+}
 
 function setStatus(t){
   document.getElementById("status").innerText = t;
+}
+
+/* INCOMING UI */
+function showIncomingUI(from){
+
+  let box = document.createElement("div");
+  box.id = "incoming";
+  box.style = `
+    position:fixed;
+    top:20px;
+    left:50%;
+    transform:translateX(-50%);
+    background:#000;
+    border:2px solid #00ff99;
+    padding:20px;
+    color:#00ff99;
+    z-index:999;
+  `;
+
+  box.innerHTML = `
+    <b>📳 Incoming Call from ${from}</b><br><br>
+    <button onclick="acceptCall()">Accept</button>
+    <button onclick="rejectCall()">Reject</button>
+  `;
+
+  document.body.appendChild(box);
+}
+
+function hideIncomingUI(){
+  const el = document.getElementById("incoming");
+  if(el) el.remove();
 }
 
 /* -------------------- */
