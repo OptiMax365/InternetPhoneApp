@@ -6,6 +6,7 @@ import bcrypt from "bcrypt";
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
+import cors from "cors";
 
 dotenv.config();
 
@@ -24,6 +25,8 @@ const pool = new Pool({
 });
 
 app.use(express.json());
+
+app.use(cors());
 
 app.use(express.static(__dirname));
 
