@@ -1,125 +1,198 @@
-const express = require("express");
-const http = require("http");
-const WebSocket = require("ws");
-const path = require("path");
-const { Pool } = require("pg");
+// server.js
+
+import express from "express";
+import cors from "cors";
+import bodyParser from "body-parser";
+import pkg from "pg";
+import bcrypt from "bcrypt";
+import { ExpressPeerServer } from "peer";
+import http from "http";
+
+const { Pool } = pkg;
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
 
-app.use(express.static(path.join(__dirname, "public")));
+const port = process.env.PORT || 3000;
 
-/* PostgreSQL */
+// =========================
+// POSTGRESQL DATABASE
+// =========================
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
+  connectionString:
+    process.env.DATABASE_URL ||
+    "postgresql://admin:jJYTKV0cpikWb4aN5bTIhOaQIN6Tm70Z@dpg-d844caeq1p3s738l08g0-a/voice_mesh_db",
+  ssl: {
+    rejectUnauthorized: false,
+  },
 });
 
-/* Create table */
-pool.query(`
-CREATE TABLE IF NOT EXISTS users (
-  username TEXT PRIMARY KEY
-);
-`);
+// =========================
+// CREATE USERS TABLE
+// =========================
 
-/* runtime memory */
-const peers = new Map();     // username -> peerId
-const sessions = new Map();  // username -> ws
+async function createTable() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        username TEXT UNIQUE NOT NULL,
+        password TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
 
-function send(ws, data) {
-  if (ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(data));
+    console.log("Users table ready");
+  } catch (err) {
+    console.log(err);
   }
 }
 
-function broadcastUsers() {
-  const users = [...peers.entries()].map(([username, peerId]) => ({
-    username,
-    peerId
-  }));
+createTable();
 
-  wss.clients.forEach(ws => {
-    send(ws, { type: "user-list", users });
-  });
-}
+// =========================
+// MIDDLEWARE
+// =========================
 
-/* WS */
-wss.on("connection", (ws) => {
-  let currentUser = null;
+app.use(cors());
+app.use(bodyParser.json());
+app.use(express.static("public"));
 
-  ws.on("message", async (msg) => {
-    let d;
-    try {
-      d = JSON.parse(msg);
-    } catch {
-      return;
-    }
+// =========================
+// PEER SERVER
+// =========================
 
-    /* SIGNUP */
-    if (d.type === "signup") {
-      const u = d.username?.toLowerCase();
-      if (!u) return;
+const peerServer = ExpressPeerServer(server, {
+  debug: true,
+  path: "/",
+});
 
-      const exists = await pool.query(
-        "SELECT 1 FROM users WHERE username=$1",
-        [u]
-      );
+app.use("/peerjs", peerServer);
 
-      if (exists.rows.length) {
-        return send(ws, { type: "signup-fail", reason: "exists" });
-      }
+// =========================
+// SIGNUP
+// =========================
 
-      await pool.query(
-        "INSERT INTO users(username) VALUES($1)",
-        [u]
-      );
+app.post("/signup", async (req, res) => {
+  try {
+    let { username, password } = req.body;
 
-      return send(ws, { type: "signup-ok" });
-    }
-
-    /* LOGIN */
-    if (d.type === "login") {
-      const u = d.username?.toLowerCase();
-      if (!u) return;
-
-      const res = await pool.query(
-        "SELECT 1 FROM users WHERE username=$1",
-        [u]
-      );
-
-      if (!res.rows.length) {
-        return send(ws, { type: "login-fail" });
-      }
-
-      currentUser = u;
-      sessions.set(u, ws);
-
-      return send(ws, {
-        type: "login-ok",
-        username: u
+    if (!username || !password) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing username or password",
       });
     }
 
-    /* BLOCK EVERYTHING IF NOT LOGGED IN */
-    if (!currentUser) return;
+    username = username
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "");
 
-    /* REGISTER PEER */
-    if (d.type === "register-peer") {
-      peers.set(currentUser, d.peerId);
-      broadcastUsers();
-    }
-  });
+    const existing = await pool.query(
+      "SELECT * FROM users WHERE username = $1",
+      [username]
+    );
 
-  ws.on("close", () => {
-    if (currentUser) {
-      sessions.delete(currentUser);
-      peers.delete(currentUser);
-      broadcastUsers();
+    if (existing.rows.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Username already exists",
+      });
     }
-  });
+
+    const hashed = await bcrypt.hash(password, 10);
+
+    await pool.query(
+      "INSERT INTO users(username,password) VALUES($1,$2)",
+      [username, hashed]
+    );
+
+    res.json({
+      success: true,
+      message: "Registered successfully",
+      username,
+    });
+  } catch (err) {
+    console.log(err);
+
+    res.status(500).json({
+      success: false,
+      message: "Signup server error",
+    });
+  }
 });
 
-server.listen(3000, () => {
-  console.log("Server running on http://localhost:3000");
+// =========================
+// LOGIN
+// =========================
+
+app.post("/login", async (req, res) => {
+  try {
+    let { username, password } = req.body;
+
+    if (!username || !password) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing username or password",
+      });
+    }
+
+    username = username
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "");
+
+    const result = await pool.query(
+      "SELECT * FROM users WHERE username = $1",
+      [username]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid username",
+      });
+    }
+
+    const user = result.rows[0];
+
+    const valid = await bcrypt.compare(password, user.password);
+
+    if (!valid) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid password",
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Login successful",
+      username: user.username,
+      peerId: user.username,
+    });
+  } catch (err) {
+    console.log(err);
+
+    res.status(500).json({
+      success: false,
+      message: "Login server error",
+    });
+  }
+});
+
+// =========================
+// ONLINE TEST
+// =========================
+
+app.get("/", (req, res) => {
+  res.send("VOICE MESH SERVER ONLINE");
+});
+
+// =========================
+// START SERVER
+// =========================
+
+server.listen(port, () => {
+  console.log(`Server running on port ${port}`);
 });

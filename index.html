@@ -5,224 +5,479 @@
 <title>NEON Voice Mesh</title>
 
 <style>
-body {
+
+body{
   margin:0;
-  font-family: Arial;
-  background:#040804;
+  font-family:Arial;
+  background:#020702;
   color:#00ff99;
+  overflow-x:hidden;
 }
 
-.box {
-  width:340px;
+body::before{
+  content:"";
+  position:fixed;
+  width:100%;
+  height:100%;
+  background:
+  radial-gradient(circle at 20% 20%, rgba(0,255,120,0.15), transparent 40%),
+  radial-gradient(circle at 80% 70%, rgba(0,255,120,0.10), transparent 40%);
+  animation:bg 6s infinite alternate;
+  z-index:-1;
+}
+
+@keyframes bg{
+  from{
+    transform:scale(1);
+  }
+  to{
+    transform:scale(1.1);
+  }
+}
+
+.box{
+  width:360px;
   margin:15px auto;
   padding:15px;
-  border:1px solid #00ff99;
   border-radius:12px;
-  background:rgba(0,0,0,0.65);
-  box-shadow:0 0 18px #00ff99;
+  border:1px solid #00ff99;
+  background:rgba(0,0,0,0.6);
+  box-shadow:0 0 20px #00ff99;
 }
 
-input, button {
+h2{
+  text-align:center;
+  text-shadow:0 0 12px #00ff99;
+}
+
+input,button{
+  width:95%;
   padding:10px;
   margin:5px;
-  border-radius:8px;
   border:none;
+  border-radius:8px;
   background:#001a10;
   color:#00ff99;
+  box-shadow:0 0 10px #00ff99;
 }
 
-button:hover { cursor:pointer; }
+button:hover{
+  cursor:pointer;
+  transform:scale(1.03);
+}
 
-#status { animation: blink 1.2s infinite; }
-@keyframes blink { 50% { opacity:0.4; } }
+#status{
+  font-weight:bold;
+  text-shadow:0 0 10px #00ff99;
+}
 
-.user {
+.user{
+  padding:8px;
+  margin:5px;
   border:1px solid #00ff99;
-  padding:5px;
-  margin:4px;
-  border-radius:6px;
+  border-radius:8px;
 }
+
+#incoming{
+  display:none;
+}
+
 </style>
 </head>
 
 <body>
 
-<h2 style="text-align:center;">⚡ NEON VOICE MESH</h2>
+<h2>⚡ NEON VOICE MESH</h2>
 
 <div class="box">
-  Status: <span id="status">Idle</span>
+Status:
+<div id="status">Idle</div>
 </div>
 
 <div class="box">
-  <input id="name" placeholder="username" />
-  <button onclick="signup()">Signup</button>
-  <button onclick="login()">Login</button>
+
+<input id="username" placeholder="Username">
+<input id="password" type="password" placeholder="Password">
+
+<button onclick="signup()">Register</button>
+<button onclick="login()">Login</button>
+
 </div>
 
 <div class="box">
-  Your Identity:
-  <div id="myId">---</div>
+
+Your Identity:
+<div id="myId">---</div>
+
 </div>
 
 <div class="box">
-  <input id="callTo" placeholder="Peer ID" />
-  <button onclick="callUser()">Call</button>
-  <button onclick="endCall()">End</button>
+
+<input id="callTo" placeholder="Username to call">
+
+<button onclick="callUser()">Call</button>
+<button onclick="endCall()">End Call</button>
+
+</div>
+
+<div class="box" id="incoming">
+
+<h3>📞 Incoming Call</h3>
+
+<div id="callerName"></div>
+
+<button onclick="acceptCall()">Receive Call</button>
+
 </div>
 
 <div class="box">
-  <b>Network</b>
-  <div id="network"></div>
+
+<b>Known Users</b>
+
+<div id="network"></div>
+
 </div>
 
-<audio id="audio" autoplay></audio>
+<audio id="remoteAudio" autoplay></audio>
 
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 
 <script>
-let peer;
-let stream;
-let call;
-let ws;
-let username;
+
+const SERVER = window.location.origin;
+
+let peer = null;
+let localStream = null;
+let currentCall = null;
 let loggedIn = false;
-let wsConnected = false;
+let myUsername = "";
+let incomingCall = null;
 
-function setStatus(t){
-  document.getElementById("status").innerText = t;
+let knownUsers =
+  JSON.parse(localStorage.getItem("knownUsers") || "[]");
+
+function setStatus(text){
+  document.getElementById("status").innerText = text;
 }
 
-/* WS SINGLETON */
-function connectWS(){
-  if (wsConnected) return;
+function renderUsers(){
 
-  ws = new WebSocket(location.origin.replace("http","ws"));
-  wsConnected = true;
+  const network = document.getElementById("network");
 
-  ws.onmessage = (msg) => {
-    const d = JSON.parse(msg.data);
+  network.innerHTML = "";
 
-    if (d.type === "signup-ok") setStatus("🟡 Registered");
-    if (d.type === "signup-fail") setStatus("❌ Username exists");
+  knownUsers.forEach(user => {
 
-    if (d.type === "login-ok") {
-      setStatus("🔐 Logged in");
-      startPeer(d.username);
-    }
+    const div = document.createElement("div");
 
-    if (d.type === "login-fail") {
-      setStatus("❌ Login failed");
-    }
+    div.className = "user";
 
-    if (d.type === "user-list") {
-      render(d.users);
-    }
-  };
+    div.innerText = user;
 
-  ws.onclose = () => {
-    wsConnected = false;
-  };
+    network.appendChild(div);
+
+  });
+
 }
 
-/* SIGNUP */
-function signup(){
-  connectWS();
-  setStatus("🟡 Registering");
-
-  ws.onopen = () => {
-    ws.send(JSON.stringify({
-      type:"signup",
-      username: document.getElementById("name").value.trim()
-    }));
-  };
+function saveUsers(){
+  localStorage.setItem(
+    "knownUsers",
+    JSON.stringify(knownUsers)
+  );
 }
 
-/* LOGIN */
+async function signup(){
+
+  const username =
+    document.getElementById("username")
+    .value
+    .trim()
+    .toLowerCase();
+
+  const password =
+    document.getElementById("password")
+    .value;
+
+  if(!username || !password){
+    alert("Enter username and password");
+    return;
+  }
+
+  setStatus("🟡 Registering...");
+
+  try{
+
+    const res = await fetch(SERVER + "/signup",{
+      method:"POST",
+      headers:{
+        "Content-Type":"application/json"
+      },
+      body:JSON.stringify({
+        username,
+        password
+      })
+    });
+
+    const data = await res.json();
+
+    if(data.success){
+
+      setStatus("✅ Registered");
+
+    }else{
+
+      setStatus("❌ " + data.message);
+
+    }
+
+  }catch(err){
+
+    console.log(err);
+
+    setStatus("❌ Signup failed");
+
+  }
+
+}
+
 async function login(){
-  connectWS();
+
+  const username =
+    document.getElementById("username")
+    .value
+    .trim()
+    .toLowerCase();
+
+  const password =
+    document.getElementById("password")
+    .value;
+
+  if(!username || !password){
+    alert("Enter username and password");
+    return;
+  }
 
   setStatus("🔐 Logging in");
 
-  stream = await navigator.mediaDevices.getUserMedia({audio:true});
+  try{
 
-  ws.onopen = () => {
-    ws.send(JSON.stringify({
-      type:"login",
-      username: document.getElementById("name").value.trim()
-    }));
-  };
-}
-
-/* PEER START ONLY AFTER LOGIN */
-function startPeer(user){
-  if (loggedIn) return;
-  loggedIn = true;
-
-  username = user;
-
-  const id = username + "_" + Math.random().toString(36).slice(2,7);
-
-  peer = new Peer(id);
-
-  document.getElementById("myId").innerText = id;
-
-  peer.on("open", () => {
-    setStatus("📞 Ready");
-
-    ws.send(JSON.stringify({
-      type:"register-peer",
-      username,
-      peerId:id
-    }));
-  });
-
-  peer.on("call", c => {
-    c.answer(stream);
-    call = c;
-
-    c.on("stream", r => {
-      document.getElementById("audio").srcObject = r;
-      setStatus("📞 In Call");
+    const res = await fetch(SERVER + "/login",{
+      method:"POST",
+      headers:{
+        "Content-Type":"application/json"
+      },
+      body:JSON.stringify({
+        username,
+        password
+      })
     });
-  });
+
+    const data = await res.json();
+
+    if(!data.success){
+
+      setStatus("❌ " + data.message);
+
+      return;
+    }
+
+    setStatus("Authenticating...");
+
+    myUsername = data.username;
+
+    document.getElementById("myId")
+    .innerText = myUsername;
+
+    loggedIn = true;
+
+    await startPeer();
+
+  }catch(err){
+
+    console.log(err);
+
+    setStatus("❌ Login failed");
+
+  }
+
 }
 
-/* CALL */
+async function startPeer(){
+
+  try{
+
+    localStream =
+      await navigator.mediaDevices.getUserMedia({
+        audio:true
+      });
+
+    peer = new Peer(myUsername,{
+      host:window.location.hostname,
+      port:window.location.port || (
+        location.protocol === "https:" ? 443 : 80
+      ),
+      path:"/peerjs"
+    });
+
+    peer.on("open", id => {
+
+      setStatus("🟢 Logged in");
+
+      setTimeout(()=>{
+        setStatus("📞 Ready state");
+      },1000);
+
+    });
+
+    peer.on("call", call => {
+
+      incomingCall = call;
+
+      document.getElementById("incoming")
+      .style.display = "block";
+
+      document.getElementById("callerName")
+      .innerText =
+        "📞 Ringing from: " + call.peer;
+
+      setStatus("📞 Ringing");
+
+    });
+
+    peer.on("error", err => {
+
+      console.log(err);
+
+      setStatus("❌ Peer Error");
+
+    });
+
+  }catch(err){
+
+    console.log(err);
+
+    setStatus("❌ Microphone denied");
+
+  }
+
+}
+
+function acceptCall(){
+
+  if(!incomingCall) return;
+
+  incomingCall.answer(localStream);
+
+  currentCall = incomingCall;
+
+  setStatus("📞 Call Connected");
+
+  incomingCall.on("stream", remoteStream => {
+
+    document.getElementById("remoteAudio")
+    .srcObject = remoteStream;
+
+  });
+
+  document.getElementById("incoming")
+  .style.display = "none";
+
+  if(!knownUsers.includes(incomingCall.peer)){
+
+    knownUsers.push(incomingCall.peer);
+
+    saveUsers();
+
+    renderUsers();
+
+  }
+
+}
+
 function callUser(){
-  if (!peer) return;
 
-  const id = document.getElementById("callTo").value.trim();
+  if(!loggedIn){
 
-  setStatus("Calling...");
+    alert("Login first");
 
-  const c = peer.call(id, stream);
-  call = c;
+    return;
 
-  c.on("stream", r => {
-    document.getElementById("audio").srcObject = r;
+  }
+
+  const target =
+    document.getElementById("callTo")
+    .value
+    .trim()
+    .toLowerCase();
+
+  if(!target){
+
+    alert("Enter username");
+
+    return;
+
+  }
+
+  setStatus("📞 Calling " + target);
+
+  const call =
+    peer.call(target, localStream);
+
+  currentCall = call;
+
+  call.on("stream", remoteStream => {
+
+    document.getElementById("remoteAudio")
+    .srcObject = remoteStream;
+
     setStatus("📞 In Call");
+
   });
+
+  call.on("close", () => {
+
+    setStatus("Call Ended");
+
+  });
+
+  call.on("error", () => {
+
+    setStatus("❌ Call Failed");
+
+  });
+
+  if(!knownUsers.includes(target)){
+
+    knownUsers.push(target);
+
+    saveUsers();
+
+    renderUsers();
+
+  }
+
 }
 
-/* END CALL */
 function endCall(){
-  if (call) call.close();
-  document.getElementById("audio").srcObject = null;
+
+  if(currentCall){
+
+    currentCall.close();
+
+  }
+
+  currentCall = null;
+
+  document.getElementById("remoteAudio")
+  .srcObject = null;
+
   setStatus("Idle");
+
 }
 
-/* UI */
-function render(users){
-  const box = document.getElementById("network");
-  box.innerHTML = "";
+renderUsers();
 
-  users.forEach(u => {
-    const d = document.createElement("div");
-    d.className = "user";
-    d.innerText = u.username + " → " + u.peerId;
-    box.appendChild(d);
-  });
-}
 </script>
 
 </body>
