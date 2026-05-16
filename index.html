@@ -1,200 +1,128 @@
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<title>NEON VOICE MESH</title>
-
-<style>
-body {
-  margin:0;
-  font-family: Arial;
-  background:#040804;
-  color:#00ff99;
-}
-
-.box {
-  width:340px;
-  margin:15px auto;
-  padding:15px;
-  border:1px solid #00ff99;
-  border-radius:12px;
-  background:rgba(0,0,0,0.7);
-}
-
-input, button {
-  padding:10px;
-  margin:5px;
-  background:#001a10;
-  color:#00ff99;
-  border:none;
-}
-
-button:hover { transform:scale(1.05); cursor:pointer; }
-
-.user {
-  border:1px solid #00ff99;
-  margin:4px;
-  padding:5px;
-}
-</style>
-</head>
-
-<body>
-
-<h2 style="text-align:center;">⚡ NEON VOICE MESH</h2>
-
-<div class="box">
-  Status: <span id="status">OFFLINE</span>
-</div>
-
-<div class="box" id="auth">
-  <input id="name" placeholder="Username (10+ chars)">
-  <button onclick="signup()">Sign Up</button>
-  <button onclick="signin()">Login</button>
-</div>
-
-<div class="box" id="panel" style="display:none;">
-  Logged in as: <b id="myId"></b>
-  <button onclick="logout()">Logout</button>
-</div>
-
-<div class="box">
-  <b>Online Users</b>
-  <div id="users"></div>
-</div>
-
-<audio id="audio" autoplay></audio>
-
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 
 <script>
-
 let ws;
 let peer;
 let stream;
+let call;
+let myPeerId;
 let username;
-let activeCall;
+let loggedIn = false;
 
+/* ===================== */
+/* STATUS */
+/* ===================== */
+
+function setStatus(t) {
+  document.getElementById("status").innerText = t;
+}
+
+/* ===================== */
 /* CONNECT WS */
-function connect(){
-  ws = new WebSocket((location.protocol==="https:"?"wss":"ws")+"://"+location.host);
+/* ===================== */
 
-  ws.onmessage = (msg)=>{
+function connectWS() {
+  ws = new WebSocket(location.origin.replace("http", "ws"));
 
+  ws.onmessage = (msg) => {
     const data = JSON.parse(msg.data);
 
-    if(data.type==="users"){
-      renderUsers(data.users);
+    if (data.type === "ok" && data.message === "logged-in") {
+      onLoginSuccess();
     }
 
-    if(data.type==="incoming-call"){
-      alert("📳 Incoming call from " + data.from);
+    if (data.type === "error") {
+      alert(data.message);
     }
 
-    if(data.type==="call-start"){
-      setStatus("🔵 ON CALL");
+    if (data.type === "incoming-call") {
+      setStatus("Incoming call from " + data.from);
+
+      const c = peer.call(data.peerId, stream);
+      call = c;
+
+      c.on("stream", (rstream) => {
+        document.getElementById("audio").srcObject = rstream;
+        setStatus("In call");
+      });
     }
 
-    if(data.type==="call-ended"){
-      setStatus("📴 Call ended");
-      if(activeCall) activeCall.close();
+    if (data.type === "call-ended") {
+      endCall();
     }
-
-    if(data.type==="error") alert(data.message);
-    if(data.type==="ok") setStatus(data.message);
   };
 }
 
-/* SIGNUP */
-function signup(){
-  username = getName();
+/* ===================== */
+/* LOGIN FLOW */
+/* ===================== */
 
-  ws.send(JSON.stringify({
-    type:"signup",
-    username
-  }));
-}
+async function start() {
+  username = document.getElementById("name").value
+    .replace(/[^a-zA-Z0-9]/g, "")
+    .toLowerCase();
 
-/* LOGIN */
-async function signin(){
+  if (!username) return alert("Enter username");
 
-  username = getName();
+  connectWS();
 
-  stream = await navigator.mediaDevices.getUserMedia({audio:true});
+  stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-  peer = new Peer(username + "_" + Math.random().toString(36).substr(2,5));
+  myPeerId = username + "_" + Math.random().toString(36).slice(2, 10);
 
-  peer.on("open",(id)=>{
+  peer = new Peer(myPeerId);
 
+  peer.on("open", () => {
     ws.send(JSON.stringify({
-      type:"signin",
+      type: "signin",
       username,
-      peerId:id
+      peerId: myPeerId
     }));
-
-    document.getElementById("auth").style.display="none";
-    document.getElementById("panel").style.display="block";
-
-    document.getElementById("myId").innerText=username;
-    setStatus("ONLINE");
-  });
-
-  peer.on("call",(call)=>{
-    call.answer(stream);
-    activeCall = call;
-
-    call.on("stream",(remote)=>{
-      document.getElementById("audio").srcObject = remote;
-    });
   });
 }
 
-/* CALL USER */
-function callUser(peerId, user){
+/* ===================== */
+/* AFTER LOGIN */
+/* ===================== */
+
+function onLoginSuccess() {
+  loggedIn = true;
+  setStatus("Online (verified)");
+
+  document.getElementById("myId").innerText = myPeerId;
+}
+
+/* ===================== */
+/* CALLING */
+/* ===================== */
+
+function callUser() {
+  if (!loggedIn) return alert("Not logged in");
+
+  const target = document.getElementById("callTo").value.trim();
+  if (!target) return;
+
   ws.send(JSON.stringify({
-    type:"call-request",
-    from:username,
-    to:user
+    type: "call-request",
+    from: username,
+    to: target
+  }));
+}
+
+/* ===================== */
+/* END CALL */
+/* ===================== */
+
+function endCall() {
+  if (call) call.close();
+  call = null;
+  document.getElementById("audio").srcObject = null;
+
+  ws.send(JSON.stringify({
+    type: "end-call",
+    from: username
   }));
 
-  activeCall = peer.call(peerId, stream);
+  setStatus("Idle");
 }
-
-/* LOGOUT */
-function logout(){
-  ws.send(JSON.stringify({type:"logout"}));
-  location.reload();
-}
-
-/* UI */
-function renderUsers(users){
-  const box=document.getElementById("users");
-  box.innerHTML="";
-
-  users.forEach(u=>{
-    if(u.username===username) return;
-
-    const div=document.createElement("div");
-    div.className="user";
-    div.innerText=u.username;
-
-    div.onclick=()=>callUser(u.peerId,u.username);
-
-    box.appendChild(div);
-  });
-}
-
-function getName(){
-  return document.getElementById("name").value.trim();
-}
-
-function setStatus(t){
-  document.getElementById("status").innerText=t;
-}
-
-connect();
-
 </script>
-
-</body>
-</html>

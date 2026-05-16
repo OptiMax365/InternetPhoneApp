@@ -11,7 +11,7 @@ const wss = new WebSocket.Server({ server });
 app.use(express.static(path.join(__dirname, "public")));
 
 /* ===================== */
-/* POSTGRES CONNECTION */
+/* POSTGRES */
 /* ===================== */
 
 const pool = new Pool({
@@ -19,7 +19,6 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-/* CREATE TABLE */
 pool.query(`
 CREATE TABLE IF NOT EXISTS users (
   username TEXT PRIMARY KEY
@@ -27,63 +26,54 @@ CREATE TABLE IF NOT EXISTS users (
 `);
 
 /* ===================== */
-/* MEMORY MAPS */
+/* STATE */
 /* ===================== */
 
-const sockets = new Map(); // username → ws
-const peers = new Map();   // username → peerId
+const sockets = new Map();
+const peers = new Map();
 
-function normalize(u){
+function norm(u) {
   return (u || "").trim().toLowerCase();
 }
 
-function send(user, data){
+function send(user, data) {
   const ws = sockets.get(user);
-  if (ws && ws.readyState === WebSocket.OPEN) {
+  if (ws?.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(data));
   }
 }
 
-function broadcastUsers(){
+function broadcastUsers() {
   const users = Array.from(peers.entries()).map(([username, peerId]) => ({
     username,
     peerId
   }));
 
-  wss.clients.forEach(c => {
-    if (c.readyState === WebSocket.OPEN) {
-      c.send(JSON.stringify({
-        type: "users",
-        users
-      }));
+  for (const ws of wss.clients) {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "users", users }));
     }
-  });
+  }
 }
 
 /* ===================== */
-/* WS CONNECTION */
+/* WS */
 /* ===================== */
 
 wss.on("connection", (ws) => {
-
   let currentUser = null;
 
   ws.on("message", async (msg) => {
-
     const data = JSON.parse(msg);
 
-    /* ===================== */
-    /* SIGNUP */
-    /* ===================== */
-
+    /* ===== SIGNUP ===== */
     if (data.type === "signup") {
+      const username = norm(data.username);
 
-      const username = normalize(data.username);
-
-      if (username.length < 10) {
+      if (username.length < 4) {
         return ws.send(JSON.stringify({
           type: "error",
-          message: "Username must be 10+ characters"
+          message: "Username too short"
         }));
       }
 
@@ -104,19 +94,15 @@ wss.on("connection", (ws) => {
         [username]
       );
 
-      ws.send(JSON.stringify({
+      return ws.send(JSON.stringify({
         type: "ok",
         message: "Signup successful"
       }));
     }
 
-    /* ===================== */
-    /* SIGNIN */
-    /* ===================== */
-
+    /* ===== SIGNIN (STRICT VERIFICATION) ===== */
     if (data.type === "signin") {
-
-      const username = normalize(data.username);
+      const username = norm(data.username);
 
       const user = await pool.query(
         "SELECT username FROM users WHERE username=$1",
@@ -137,18 +123,14 @@ wss.on("connection", (ws) => {
 
       broadcastUsers();
 
-      ws.send(JSON.stringify({
+      return ws.send(JSON.stringify({
         type: "ok",
-        message: "Logged in"
+        message: "logged-in"
       }));
     }
 
-    /* ===================== */
-    /* CALL REQUEST */
-    /* ===================== */
-
+    /* ===== CALL ===== */
     if (data.type === "call-request") {
-
       send(data.to, {
         type: "incoming-call",
         from: data.from,
@@ -156,32 +138,18 @@ wss.on("connection", (ws) => {
       });
     }
 
-    /* ===================== */
-    /* ACCEPT CALL */
-    /* ===================== */
-
     if (data.type === "accept-call") {
-
       send(data.to, { type: "call-start" });
       send(data.from, { type: "call-start" });
     }
 
-    /* ===================== */
-    /* END CALL */
-    /* ===================== */
-
     if (data.type === "end-call") {
-
       send(data.to, { type: "call-ended" });
       send(data.from, { type: "call-ended" });
     }
 
-    /* ===================== */
-    /* LOGOUT */
-    /* ===================== */
-
+    /* ===== LOGOUT ===== */
     if (data.type === "logout") {
-
       if (currentUser) {
         sockets.delete(currentUser);
         peers.delete(currentUser);
@@ -197,7 +165,6 @@ wss.on("connection", (ws) => {
       broadcastUsers();
     }
   });
-
 });
 
 server.listen(process.env.PORT || 3000);
